@@ -1,12 +1,9 @@
 {
-  "_comment": "Todo lo ajustable del pipeline vive aqui. El workflow y el Makefile lo leen.",
+  "_comment": "Everything tunable about the pipeline lives here. The workflow and Makefile read it.",
   "source": {
     "listing_url": "http://www.sunat.gob.pe/descargaPRR/mrc137_padron_reducido.html",
     "fallback_zip_urls": [
       "http://www2.sunat.gob.pe/padron_reducido_ruc.zip"
-    ],
-    "anexo_fallback_zip_urls": [
-      "http://www2.sunat.gob.pe/padron_reducido_ruc_anexo.zip"
     ],
     "encoding": "cp1252",
     "delimiter": "|"
@@ -14,17 +11,11 @@
   "dataset": {
     "include_domicilio": true,
     "max_domicilio_chars": 90,
-    "include_anexos": false,
     "shard_count": 4096
-  },
-  "sqlite": {
-    "page_size": 4096,
-    "request_chunk_size": 4096,
-    "split_bytes": 41943040
   },
   "budget": {
     "max_site_bytes": 943718400,
-    "_note": "GitHub Pages rechaza sitios publicados de mas de 1 GB. 900 MiB deja margen."
+    "_note": "GitHub Pages rejects published sites over 1 GB. 900 MiB leaves margin."
   },
   "site": {
     "title": "Padron RUC (snapshot SUNAT)",

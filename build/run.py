@@ -1,17 +1,18 @@
-"""Orquestador del build.
+"""Build orchestrator.
 
-Dos modos:
+Two modes:
 
-  python build/run.py check   -> resuelve la fuente, la compara contra el
-                                 meta.json del sitio YA publicado y decide si
-                                 hay que reconstruir. No descarga el padron.
+  python build/run.py check   -> resolves the source, compares it against the
+                                 meta.json of the ALREADY published site and
+                                 decides whether a rebuild is needed. Does not
+                                 download the padron.
 
-  python build/run.py build   -> descarga, parsea una sola vez y alimenta en
-                                 paralelo el SQLite y los shards, arma dist/ y
-                                 escribe meta.json.
+  python build/run.py build   -> downloads, parses once and feeds the core and
+                                 domicilio shard sets, assembles dist/ and writes
+                                 meta.json.
 
-El estado del ultimo build vive en el sitio desplegado, no en el repositorio.
-Nada se commitea nunca: el historial de git se queda del tamano del codigo.
+The state of the last build lives in the deployed site, not in the repository.
+Nothing is ever committed: the git history stays the size of the code.
 """
 
 from __future__ import annotations
@@ -29,22 +30,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import discover  # noqa: E402
 import prepare  # noqa: E402
 from common import (  # noqa: E402
-    COND_CODES,
+    COND_LABELS,
     DIST,
-    ESTADO_CODES,
+    ESTADO_LABELS,
     ROOT,
     WORK,
-    human_bytes,
     load_config,
     log,
     write_json,
 )
-from shards import ShardSink  # noqa: E402
-from sqlite_index import SqliteSink, split_for_httpvfs  # noqa: E402
+from shards import ShardSink, core_line, domicilio_line  # noqa: E402
 
 
 def emit_output(**kwargs) -> None:
-    """Escribe outputs para GitHub Actions (y los imprime para humanos)."""
+    """Write outputs for GitHub Actions (and print them for humans)."""
     path = os.environ.get("GITHUB_OUTPUT")
     for key, value in kwargs.items():
         line = "{}={}".format(key, value)
@@ -55,7 +54,7 @@ def emit_output(**kwargs) -> None:
 
 
 def cmd_check(args, cfg) -> int:
-    sig = discover.resolve(cfg, "main")
+    sig = discover.resolve(cfg)
     previous = discover.previous_signature(args.base_url)
     prev_sig = (previous or {}).get("source") or {}
 
@@ -65,14 +64,14 @@ def cmd_check(args, cfg) -> int:
         and prev_sig.get("last_modified") == sig.get("last_modified")
         and prev_sig.get("content_length") == sig.get("content_length")
     )
-    # Un dataset publicado con otra version del pipeline debe reconstruirse
-    # aunque la fuente no haya cambiado.
+    # A dataset published with another pipeline version must be rebuilt even if
+    # the source has not changed.
     same = same and (previous or {}).get("pipeline") == pipeline_version(cfg)
 
     should = args.force or not same
-    log("firma remota : {}".format(json.dumps(sig, ensure_ascii=False)))
-    log("firma previa : {}".format(json.dumps(prev_sig, ensure_ascii=False)))
-    log("reconstruir  : {}".format(should))
+    log("remote signature : {}".format(json.dumps(sig, ensure_ascii=False)))
+    log("previous signature : {}".format(json.dumps(prev_sig, ensure_ascii=False)))
+    log("rebuild : {}".format(should))
     emit_output(
         should_build=str(should).lower(),
         source_url=sig["url"],
@@ -83,78 +82,70 @@ def cmd_check(args, cfg) -> int:
 
 
 def pipeline_version(cfg: dict) -> str:
-    """Cambia cuando cambia la forma del dataset, para forzar rebuild."""
+    """Changes when the dataset shape changes, to force a rebuild."""
     ds = cfg["dataset"]
-    sq = cfg["sqlite"]
-    return "v1|dom={}:{}|anexos={}|shards={}|page={}|chunk={}".format(
+    return "v2|dom={}:{}|shards={}".format(
         ds["include_domicilio"],
         ds.get("max_domicilio_chars", 90),
-        ds["include_anexos"],
         ds["shard_count"],
-        sq["page_size"],
-        sq["request_chunk_size"],
     )
 
 
 def cmd_build(args, cfg) -> int:
     source_cfg = cfg["source"]
     ds = cfg["dataset"]
-    sq = cfg["sqlite"]
+    include_dom = ds["include_domicilio"]
 
     if args.local_txt:
         sig = {"url": "local:" + args.local_txt, "etag": None,
                "last_modified": None, "content_length": None}
     else:
-        sig = discover.resolve(cfg, "main")
+        sig = discover.resolve(cfg)
 
-    txt_path = prepare.prepare_source(cfg, sig, args.local_txt)
+    txt_path, sig["sha256"] = prepare.prepare_source(cfg, sig, args.local_txt)
 
     if DIST.exists():
         shutil.rmtree(DIST)
     DIST.mkdir(parents=True, exist_ok=True)
     WORK.mkdir(parents=True, exist_ok=True)
 
-    db_path = WORK / "padron.sqlite3"
-    sqlite_sink = SqliteSink(db_path, sq["page_size"], ds["include_domicilio"])
-    shard_sink = ShardSink(WORK, DIST / "shards", ds["shard_count"])
+    core_sink = ShardSink(WORK, DIST / "shards", ds["shard_count"],
+                          ["ruc", "nombre", "estado", "cond", "ubigeo"], core_line)
+    dom_sink = (
+        ShardSink(WORK, DIST / "dom", ds["shard_count"], ["ruc", "dom"], domicilio_line)
+        if include_dom else None
+    )
 
-    log("parseando y alimentando ambos indices en una sola pasada...")
+    log("parsing and feeding the shard sets in a single pass...")
     records = prepare.iter_records(
         txt_path,
         source_cfg["encoding"],
         source_cfg["delimiter"],
-        ds["include_domicilio"],
+        include_dom,
         int(ds.get("max_domicilio_chars", 90)),
     )
 
     total = 0
     for rec in records:
-        sqlite_sink.add(rec)
-        shard_sink.add(rec)
+        core_sink.add(rec)
+        if dom_sink:
+            dom_sink.add(rec)
         total += 1
         if args.limit and total >= args.limit:
-            log("corte por --limit en {:,} registros".format(total))
+            log("stopped by --limit at {:,} records".format(total))
             break
 
     if total == 0:
-        print("ERROR: no se parseo ningun registro; abortando.", file=sys.stderr)
+        print("ERROR: no records were parsed; aborting.", file=sys.stderr)
         return 1
 
     snapshot = sig.get("last_modified") or dt.datetime.now(dt.timezone.utc).strftime(
         "%a, %d %b %Y %H:%M:%S GMT"
     )
-    sqlite_sink.finalize({"records": total, "snapshot": snapshot})
-    shard_manifest = shard_sink.finalize()
+    core_manifest = core_sink.finalize()
+    dom_manifest = dom_sink.finalize() if dom_sink else None
 
-    db_cfg = split_for_httpvfs(
-        db_path,
-        DIST / "db",
-        request_chunk_size=sq["request_chunk_size"],
-        server_chunk_size=sq["split_bytes"],
-        url_prefix="db/",
-    )
-
-    # UI estatica.
+    # Static UI.
     for item in (ROOT / "web").iterdir():
         target = DIST / item.name
         if item.is_dir():
@@ -168,36 +159,36 @@ def cmd_build(args, cfg) -> int:
         "source": sig,
         "snapshot": snapshot,
         "records": total,
-        "includeDomicilio": ds["include_domicilio"],
-        "sqlite": db_cfg,
-        "shards": shard_manifest,
+        "includeDomicilio": include_dom,
+        "shards": core_manifest,
+        "domicilio": dom_manifest,
         "codes": {
-            "estado": {str(v): k for k, v in ESTADO_CODES.items()},
-            "cond": {str(v): k for k, v in COND_CODES.items()},
+            "estado": {str(c): lbl for c, lbl in ESTADO_LABELS.items()},
+            "cond": {str(c): lbl for c, lbl in COND_LABELS.items()},
         },
     }
     write_json(DIST / "meta.json", meta)
-    # .nojekyll evita que Pages se coma las carpetas que empiezan con guion bajo
-    # y ahorra el paso de build de Jekyll.
+    # .nojekyll prevents Pages from swallowing folders that start with an
+    # underscore and skips the Jekyll build step.
     (DIST / ".nojekyll").write_text("", encoding="utf-8")
 
-    log("dist listo con {:,} registros".format(total))
+    log("dist ready with {:,} records".format(total))
     return 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build del padron RUC estatico")
+    parser = argparse.ArgumentParser(description="Build of the static RUC padron")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_check = sub.add_parser("check", help="decide si hay que reconstruir")
+    p_check = sub.add_parser("check", help="decide whether a rebuild is needed")
     p_check.add_argument("--base-url", default=os.environ.get("SITE_BASE_URL", ""))
     p_check.add_argument("--force", action="store_true")
 
-    p_build = sub.add_parser("build", help="construye dist/")
+    p_build = sub.add_parser("build", help="build dist/")
     p_build.add_argument("--local-txt", default=None,
-                         help="usa un .txt local en vez de descargar de SUNAT")
+                         help="use a local .txt instead of downloading from SUNAT")
     p_build.add_argument("--limit", type=int, default=0,
-                         help="corta despues de N registros (para pruebas)")
+                         help="stop after N records (for testing)")
 
     args = parser.parse_args()
     cfg = load_config()

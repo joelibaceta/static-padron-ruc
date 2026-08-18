@@ -9,13 +9,11 @@ const result = $('result');
 
 const client = new PadronClient('.');
 
-const ESTADO_TONE = { 0: 'ok', 2: 'bad', 1: 'bad', 3: 'warn', 4: 'warn', 6: 'warn' };
-const COND_TONE = { 0: 'ok', 1: 'bad', 2: 'warn', 3: 'warn' };
+// Pill tone per estado / cond code; anything unlisted falls back to 'warn'.
+const ESTADO_TONE = { 0: 'ok', 1: 'bad', 2: 'bad', 5: 'bad', 7: 'bad', 8: 'bad', 9: 'bad', 10: 'bad', 13: 'bad' };
+const COND_TONE = { 0: 'ok', 1: 'bad' };
 
-function setHint(text, isError = false) {
-  hint.textContent = text;
-  hint.classList.toggle('error', isError);
-}
+const NUM = (n) => n.toLocaleString('es-PE');
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => (
@@ -23,41 +21,58 @@ function esc(value) {
   ));
 }
 
+// Plain-text status line, optionally styled as an error.
+function setHint(text, isError = false) {
+  hint.textContent = text;
+  hint.classList.toggle('error', isError);
+}
+
+// Status line with trusted markup (bold numbers, icon); never an error.
+function setHintHtml(html) {
+  hint.innerHTML = html;
+  hint.classList.remove('error');
+}
+
+// Inline line icon from the SVG sprite. Decorative: aria-hidden.
+function ico(id, cls = '') {
+  const klass = cls ? `ico ${cls}` : 'ico';
+  return `<svg class="${klass}" width="20" height="20" aria-hidden="true" focusable="false"><use href="#i-${id}"/></svg>`;
+}
+
 function formatRuc(ruc) {
   return `${ruc.slice(0, 2)} ${ruc.slice(2, 10)} ${ruc.slice(10)}`;
 }
 
+function row(iconId, label, value) {
+  return `<div class="row">${ico(iconId)}<span class="label">${label}</span><span class="val">${value}</span></div>`;
+}
+
+// The "wow" line: the effect (fast, over millions, serverless), not the mechanism.
+function setWow(ms) {
+  setHintHtml(`${ico('bolt', 'bolt')} <b>${ms} ms</b> · buscado en <b>${NUM(client.meta.records)}</b> registros · sin backend`);
+}
+
 function render(record, ruc) {
   if (!record) {
-    result.innerHTML = `<div class="card">
-      <h2>Sin resultados</h2>
+    result.innerHTML = `<div class="panel">
+      <h2 class="name">Sin resultados</h2>
       <p class="ruc">${esc(formatRuc(ruc))}</p>
-      <p style="margin:.9rem 0 0;font-size:.92rem">
-        Este RUC no aparece en el snapshot. Puede ser muy reciente, o no existir.
-      </p>
+      <p class="empty">Este RUC no aparece en el snapshot. Puede ser muy reciente, o no existir.</p>
     </div>`;
     return;
   }
 
-  const estado = client.estadoLabel(record.estado);
-  const cond = client.condLabel(record.cond);
   const rows = [
-    ['Estado', `<span class="pill ${ESTADO_TONE[record.estado] || 'warn'}">${esc(estado)}</span>`],
-    ['Condicion', `<span class="pill ${COND_TONE[record.cond] || 'warn'}">${esc(cond)}</span>`],
+    row('badge', 'Estado', `<span class="pill ${ESTADO_TONE[record.estado] || 'warn'}">${esc(client.estadoLabel(record.estado))}</span>`),
+    row('home', 'Condición', `<span class="pill ${COND_TONE[record.cond] || 'warn'}">${esc(client.condLabel(record.cond))}</span>`),
   ];
-  if (record.ubigeo && record.ubigeo !== '0') rows.push(['Ubigeo', esc(record.ubigeo)]);
-  if (record.dom) {
-    rows.push(['Domicilio fiscal', esc(record.dom)]);
-  } else if (client.meta?.includeDomicilio && client.backend.name === 'shards') {
-    // Los shards no cargan el domicilio a proposito; decirlo evita que parezca
-    // un dato faltante del padron.
-    rows.push(['Domicilio fiscal', '<em style="color:var(--muted)">no disponible en el indice de respaldo</em>']);
-  }
+  if (record.ubigeo && record.ubigeo !== '0') rows.push(row('pin', 'Ubigeo', esc(record.ubigeo)));
+  if (record.dom) rows.push(row('building', 'Domicilio fiscal', esc(record.dom)));
 
-  result.innerHTML = `<div class="card">
-    <h2>${esc(record.nombre)}</h2>
+  result.innerHTML = `<div class="panel">
+    <h2 class="name">${esc(record.nombre)}</h2>
     <p class="ruc">${esc(formatRuc(record.ruc))}</p>
-    <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
+    <div class="rows">${rows.join('')}</div>
   </div>`;
 }
 
@@ -65,14 +80,13 @@ form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const ruc = input.value.replace(/\D/g, '');
 
-  // Validar el digito verificador en el cliente ahorra una peticion completa
-  // en el caso mas comun de error: un digito mal tipeado.
+  // Client-side check-digit validation avoids a full lookup on the commonest error.
   if (!isValidRuc(ruc)) {
     result.innerHTML = '';
     setHint(
       ruc.length === 11
-        ? 'Ese numero tiene 11 digitos pero el digito verificador no cuadra.'
-        : 'Un RUC tiene exactamente 11 digitos.',
+        ? 'Ese número tiene 11 dígitos pero el dígito verificador no cuadra.'
+        : 'Un RUC tiene exactamente 11 dígitos.',
       true,
     );
     return;
@@ -83,9 +97,8 @@ form.addEventListener('submit', async (event) => {
   const started = performance.now();
   try {
     const record = await client.lookup(ruc);
-    const ms = Math.round(performance.now() - started);
     render(record, ruc);
-    setHint(`Resuelto en ${ms} ms via ${client.backend.name}.`);
+    setWow(Math.round(performance.now() - started));
   } catch (err) {
     result.innerHTML = '';
     setHint(`No se pudo consultar: ${err.message}`, true);
@@ -102,18 +115,12 @@ input.addEventListener('input', () => {
   try {
     const meta = await client.init();
     submit.disabled = false;
-    setHint('');
+    setHintHtml(`<b>${NUM(meta.records)}</b> registros listos · escribe un RUC`);
 
     const snapshot = meta.snapshot || meta.generatedAt || 'desconocido';
-    const parts = [
-      `${meta.records.toLocaleString('es-PE')} contribuyentes`,
-      `snapshot: ${snapshot}`,
-      `indice: ${client.backend.name}`,
-    ];
-    if (client.degraded) parts.push(`sqlite no disponible (${client.degraded})`);
-    $('meta-line').textContent = parts.join(' · ');
+    $('meta-line').textContent = `snapshot: ${snapshot}`;
     input.focus();
   } catch (err) {
-    setHint(`No se pudo cargar el indice: ${err.message}`, true);
+    setHint(`No se pudo cargar el índice: ${err.message}`, true);
   }
 })();

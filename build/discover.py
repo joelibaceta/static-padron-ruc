@@ -1,9 +1,8 @@
-"""Descubre la URL vigente del padron reducido y su firma (ETag / Last-Modified).
+"""Discover the current padron reducido zip URL and its signature (ETag / Last-Modified).
 
-SUNAT no publica un manifiesto estable, asi que rascamos la pagina de descarga y
-buscamos enlaces .zip. Si eso falla, caemos a las URLs de respaldo de config.json.
-Cualquiera de las dos rutas puede romperse si SUNAT reacomoda el sitio: por eso el
-build falla ruidosamente en vez de deployar un dataset vacio.
+SUNAT publishes no stable manifest, so we scrape the download page for .zip links
+and fall back to the URLs in config.json. Either path can break if SUNAT rearranges
+the site, so the build fails loudly instead of deploying an empty dataset.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from common import die, log
 
 USER_AGENT = (
     "padron-ruc-static/1.0 (+https://github.com/) "
-    "construye un indice estatico del padron reducido publico de SUNAT"
+    "builds a static index of SUNAT's public padron reducido"
 )
 
 ZIP_HREF = re.compile(r'href\s*=\s*["\']([^"\']+\.zip)["\']', re.IGNORECASE)
@@ -42,11 +41,11 @@ def fetch_text(url: str, timeout: int = 60) -> str:
 
 
 def signature(url: str, timeout: int = 60) -> dict:
-    """Firma barata del recurso remoto, para decidir si vale la pena reconstruir.
+    """Cheap signature of the remote resource, to decide whether to rebuild.
 
-    Se intenta HEAD; algunos frontends de SUNAT no lo soportan bien, en cuyo caso
-    se cae a un GET con Range de 1 byte, que devuelve los mismos validadores sin
-    descargar cientos de MB.
+    Tries HEAD; some SUNAT frontends handle it poorly, so it falls back to a GET
+    with a 1-byte Range, which returns the same validators without downloading
+    hundreds of MB.
     """
     try:
         with urllib.request.urlopen(_request(url, "HEAD"), timeout=timeout) as resp:
@@ -70,8 +69,8 @@ def signature(url: str, timeout: int = 60) -> dict:
     }
 
 
-def discover_zips(cfg: dict, kind: str = "main") -> List[str]:
-    """Devuelve URLs candidatas de zip, mas probable primero."""
+def discover_zips(cfg: dict) -> List[str]:
+    """Return candidate padron zip URLs, most likely first."""
     source = cfg["source"]
     listing_url = source["listing_url"]
     candidates: List[str] = []
@@ -79,18 +78,14 @@ def discover_zips(cfg: dict, kind: str = "main") -> List[str]:
     try:
         html = fetch_text(listing_url)
         for href in ZIP_HREF.findall(html):
-            candidates.append(urllib.parse.urljoin(listing_url, href))
-        log("pagina de descarga: {} enlace(s) .zip encontrados".format(len(candidates)))
-    except Exception as exc:  # noqa: BLE001 - queremos degradar, no explotar
-        log("no se pudo leer {}: {}".format(listing_url, exc))
+            url = urllib.parse.urljoin(listing_url, href)
+            if "anexo" not in url.lower():  # the anexo zip is a different dataset
+                candidates.append(url)
+        log("download page: {} .zip link(s) found".format(len(candidates)))
+    except Exception as exc:  # noqa: BLE001 - degrade, don't blow up
+        log("could not read {}: {}".format(listing_url, exc))
 
-    is_anexo = lambda u: "anexo" in u.lower()  # noqa: E731
-    if kind == "anexo":
-        candidates = [u for u in candidates if is_anexo(u)]
-        candidates += source.get("anexo_fallback_zip_urls", [])
-    else:
-        candidates = [u for u in candidates if not is_anexo(u)]
-        candidates += source.get("fallback_zip_urls", [])
+    candidates += source.get("fallback_zip_urls", [])
 
     seen = set()
     ordered = []
@@ -101,38 +96,34 @@ def discover_zips(cfg: dict, kind: str = "main") -> List[str]:
     return ordered
 
 
-def resolve(cfg: dict, kind: str = "main") -> dict:
-    """Primera URL candidata que responde. Lanza si ninguna sirve."""
-    candidates = discover_zips(cfg, kind)
+def resolve(cfg: dict) -> dict:
+    """First candidate URL that responds. Raises if none work."""
+    candidates = discover_zips(cfg)
     if not candidates:
         die(
-            "no se encontro ninguna URL de zip para '{}'. Revisa source.listing_url "
-            "y source.fallback_zip_urls en config.json.".format(kind)
+            "no zip URL found. Check source.listing_url and "
+            "source.fallback_zip_urls in config.json."
         )
 
     errors = []
     for url in candidates:
         try:
             sig = signature(url)
-            log("fuente '{}' resuelta: {} ({} bytes)".format(kind, url, sig["content_length"]))
+            log("source resolved: {} ({} bytes)".format(url, sig["content_length"]))
             return sig
         except Exception as exc:  # noqa: BLE001
             errors.append("{} -> {}".format(url, exc))
 
-    die(
-        "ninguna URL candidata respondio para '{}':\n  {}".format(
-            kind, "\n  ".join(errors)
-        )
-    )
-    return {}  # inalcanzable, calla al type checker
+    die("no candidate URL responded:\n  {}".format("\n  ".join(errors)))
+    return {}  # unreachable; keeps the type checker quiet
 
 
 def previous_signature(base_url: Optional[str]) -> Optional[dict]:
-    """Lee el meta.json del sitio ya publicado.
+    """Read meta.json from the already-published site.
 
-    Truco central del diseno: el estado del ultimo build vive en el propio sitio
-    desplegado, no en el repositorio. Asi nunca commiteamos nada y el historial
-    de git se queda del tamano del codigo fuente.
+    Core design trick: the last build's state lives on the deployed site, not in
+    the repository, so nothing is ever committed and git history stays the size of
+    the source code.
     """
     if not base_url:
         return None
@@ -142,7 +133,7 @@ def previous_signature(base_url: Optional[str]) -> Optional[dict]:
 
         return json.loads(fetch_text(url, timeout=30))
     except Exception as exc:  # noqa: BLE001
-        log("no hay meta.json previo en {} ({}); se construira de cero".format(url, exc))
+        log("no previous meta.json at {} ({}); building from scratch".format(url, exc))
         return None
 
 

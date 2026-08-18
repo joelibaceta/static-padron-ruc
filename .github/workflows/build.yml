@@ -2,13 +2,14 @@ name: build-and-deploy
 
 on:
   schedule:
-    # 02:15 America/Lima. El padron de SUNAT no cambia a diario, pero el job
-    # `check` cuesta segundos y aborta si la fuente no se movio.
-    - cron: '15 7 * * *'
+    # 00:00 America/Lima (05:00 UTC; Lima = UTC-5 year round). SUNAT's padron
+    # does not change daily, but the `check` job costs seconds and aborts if the
+    # source has not moved, so running daily is cheap.
+    - cron: '0 5 * * *'
   workflow_dispatch:
     inputs:
       force:
-        description: 'Reconstruir aunque la fuente no haya cambiado'
+        description: 'Rebuild even if the source has not changed'
         type: boolean
         default: false
   push:
@@ -37,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolver la URL publica del sitio
+      - name: Resolve the public site URL
         id: url
         run: |
           repo="${{ github.event.repository.name }}"
@@ -48,12 +49,12 @@ jobs:
             echo "base_url=https://${owner,,}.github.io/$repo" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Comparar la fuente contra el sitio publicado
+      - name: Compare the source against the published site
         id: decide
         env:
           SITE_BASE_URL: ${{ steps.url.outputs.base_url }}
         run: |
-          # Un push a web/ o build/ siempre reconstruye: cambio el pipeline o la UI.
+          # A push to web/ or build/ always rebuilds: the pipeline or UI changed.
           force=""
           if [[ "${{ github.event_name }}" == "push" ]]; then force="--force"; fi
           if [[ "${{ inputs.force }}" == "true" ]]; then force="--force"; fi
@@ -67,24 +68,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Vendorizar sql.js-httpvfs
-        # Si esto falla o el paquete cambia de forma, la UI degrada sola a los
-        # shards; por eso no se corta el build.
-        continue-on-error: true
-        run: |
-          npm install --no-save --no-audit --no-fund sql.js-httpvfs
-          mkdir -p web/vendor/sql.js-httpvfs
-          cp -r node_modules/sql.js-httpvfs/dist/. web/vendor/sql.js-httpvfs/
-          ls -la web/vendor/sql.js-httpvfs/
-
-      - name: Construir dist/
+      - name: Build dist/
         run: python3 build/run.py build
 
-      - name: Guard de presupuesto de tamano
+      - name: Size budget guard
         run: python3 build/guard.py
 
       - uses: actions/configure-pages@v5

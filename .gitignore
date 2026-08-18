@@ -1,13 +1,8 @@
-# Nada del dataset entra al repositorio. El sitio se construye en CI y se
-# deploya directo como artifact de Pages: si esto se commiteara, el historial
-# de git crecería cientos de MB por build y no habría forma de recuperarlo.
+# Nothing of the dataset enters the repository. The site is built in CI and
+# deployed straight as a Pages artifact: committing it would grow git history by
+# hundreds of MB per build with no way to reclaim it.
 dist/
 .work/
-web/vendor/
-
-node_modules/
-package-lock.json
-package.json
 
 __pycache__/
 *.py[cod]
