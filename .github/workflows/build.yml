@@ -1,0 +1,105 @@
+name: build-and-deploy
+
+on:
+  schedule:
+    # 02:15 America/Lima. El padron de SUNAT no cambia a diario, pero el job
+    # `check` cuesta segundos y aborta si la fuente no se movio.
+    - cron: '15 7 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Reconstruir aunque la fuente no haya cambiado'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'build/**'
+      - 'config.json'
+      - '.github/workflows/build.yml'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.decide.outputs.should_build }}
+      base_url: ${{ steps.url.outputs.base_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolver la URL publica del sitio
+        id: url
+        run: |
+          repo="${{ github.event.repository.name }}"
+          owner="${{ github.repository_owner }}"
+          if [[ "$repo" == *.github.io ]]; then
+            echo "base_url=https://$repo" >> "$GITHUB_OUTPUT"
+          else
+            echo "base_url=https://${owner,,}.github.io/$repo" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comparar la fuente contra el sitio publicado
+        id: decide
+        env:
+          SITE_BASE_URL: ${{ steps.url.outputs.base_url }}
+        run: |
+          # Un push a web/ o build/ siempre reconstruye: cambio el pipeline o la UI.
+          force=""
+          if [[ "${{ github.event_name }}" == "push" ]]; then force="--force"; fi
+          if [[ "${{ inputs.force }}" == "true" ]]; then force="--force"; fi
+          python3 build/run.py check --base-url "$SITE_BASE_URL" $force
+
+  build:
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Vendorizar sql.js-httpvfs
+        # Si esto falla o el paquete cambia de forma, la UI degrada sola a los
+        # shards; por eso no se corta el build.
+        continue-on-error: true
+        run: |
+          npm install --no-save --no-audit --no-fund sql.js-httpvfs
+          mkdir -p web/vendor/sql.js-httpvfs
+          cp -r node_modules/sql.js-httpvfs/dist/. web/vendor/sql.js-httpvfs/
+          ls -la web/vendor/sql.js-httpvfs/
+
+      - name: Construir dist/
+        run: python3 build/run.py build
+
+      - name: Guard de presupuesto de tamano
+        run: python3 build/guard.py
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+          retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

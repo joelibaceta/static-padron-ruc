@@ -1,0 +1,14 @@
+# Nada del dataset entra al repositorio. El sitio se construye en CI y se
+# deploya directo como artifact de Pages: si esto se commiteara, el historial
+# de git crecería cientos de MB por build y no habría forma de recuperarlo.
+dist/
+.work/
+web/vendor/
+
+node_modules/
+package-lock.json
+package.json
+
+__pycache__/
+*.py[cod]
+.DS_Store

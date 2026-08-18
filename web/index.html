@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Padron RUC — snapshot SUNAT</title>
+<meta name="description" content="Consulta de RUC sobre un snapshot del padron reducido de SUNAT, servido de forma estatica.">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfa;
+    --fg: #14161a;
+    --muted: #6b7280;
+    --line: #e2e2df;
+    --card: #ffffff;
+    --accent: #1f5f8b;
+    --ok: #146c43;
+    --warn: #8a5a00;
+    --bad: #a4262c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --fg: #e8e8e6; --muted: #9aa0a6; --line: #2b2f36;
+      --card: #1b1e24; --accent: #6ba7d1; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; justify-content: center; padding: 2.5rem 1.25rem 4rem;
+  }
+  main { width: 100%; max-width: 42rem; }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: .9rem; margin: 0 0 1.75rem; }
+  form { display: flex; gap: .5rem; margin-bottom: .75rem; }
+  input {
+    flex: 1; padding: .7rem .85rem; font-size: 1.05rem; font-variant-numeric: tabular-nums;
+    letter-spacing: .04em; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--card); color: var(--fg);
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+  button {
+    padding: .7rem 1.15rem; font-size: 1rem; border: 0; border-radius: 8px;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  .hint { min-height: 1.3rem; font-size: .85rem; color: var(--muted); margin-bottom: 1.25rem; }
+  .hint.error { color: var(--bad); }
+  .card {
+    border: 1px solid var(--line); border-radius: 10px; background: var(--card);
+    padding: 1.15rem 1.25rem; margin-bottom: 1rem;
+  }
+  .card h2 { margin: 0 0 .15rem; font-size: 1.1rem; }
+  .ruc { font-variant-numeric: tabular-nums; letter-spacing: .05em; color: var(--muted); font-size: .9rem; }
+  dl { display: grid; grid-template-columns: 9.5rem 1fr; gap: .4rem 1rem; margin: 1rem 0 0; font-size: .93rem; }
+  dt { color: var(--muted); }
+  dd { margin: 0; }
+  .pill { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .8rem; border: 1px solid currentColor; }
+  .pill.ok { color: var(--ok); } .pill.warn { color: var(--warn); } .pill.bad { color: var(--bad); }
+  footer { margin-top: 2.5rem; font-size: .8rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 1rem; }
+  footer p { margin: .4rem 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+  .notice { border-left: 3px solid var(--warn); padding-left: .8rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Padron RUC</h1>
+  <p class="sub">Snapshot del padron reducido publico de SUNAT, servido estatico. Sin backend.</p>
+
+  <form id="form" autocomplete="off">
+    <input id="ruc" name="ruc" inputmode="numeric" maxlength="13" placeholder="20100047218"
+           aria-label="Numero de RUC" required>
+    <button id="submit" type="submit" disabled>Consultar</button>
+  </form>
+  <p class="hint" id="hint" role="status" aria-live="polite">Cargando indice…</p>
+
+  <div id="result"></div>
+
+  <footer>
+    <p class="notice" id="disclaimer">
+      Estos datos son una copia periodica del padron reducido de SUNAT. El estado y la
+      condicion de domicilio pueden estar desactualizados respecto al registro vivo.
+      <strong>No usar como validacion legal</strong> de un contribuyente ni de un
+      comprobante: para eso corresponde la consulta oficial de SUNAT.
+    </p>
+    <p id="meta-line"></p>
+  </footer>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
