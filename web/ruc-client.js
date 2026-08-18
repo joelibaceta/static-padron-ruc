@@ -1,18 +1,12 @@
 /**
- * Cliente de consulta del padron RUC estatico.
+ * Query client for the static RUC padron.
  *
- * Dos backends, misma interfaz:
- *
- *   sqlite  - sql.js-httpvfs. Baja solo las paginas del B-tree que la consulta
- *             toca (unos pocos KB) via range requests. Es el camino preferido.
- *   shards  - un unico fetch de un TSV comprimido de ~40 KB elegido por
- *             `ruc % shardCount`. Sin WASM, sin workers, sin range requests.
- *
- * El backend sqlite se intenta primero y degrada en silencio a shards ante
- * cualquier fallo: WASM bloqueado, worker no vendorizado, un proxy que se coma
- * los range requests. La consulta nunca queda sin responder por eso.
+ * One index: gzipped TSV shards addressed by `ruc % shardCount`. A lookup fetches
+ * one core shard (~55 KB) and, if the record is shown, one domicilio sidecar
+ * shard. No WASM, no worker, no range requests — the page is interactive at once.
  */
 
+// Labels are normally read from meta.json; these cover a meta without codes.
 const ESTADO_FALLBACK = {
   0: 'ACTIVO',
   1: 'BAJA DE OFICIO',
@@ -22,6 +16,12 @@ const ESTADO_FALLBACK = {
   5: 'INHABILITADO-VENT.UNICA',
   6: 'PENDIENTE DE INICIO DE ACTIVIDAD',
   7: 'ANULACION DEL NUMERO INTERNO',
+  8: 'BAJA PROVISIONAL POR OFICIO',
+  9: 'BAJA POR NO ACTIVIDAD',
+  10: 'BAJA MULTIPLE INSCRIPCION',
+  11: 'NUMERO INTERNO IDENTIFICATORIO',
+  12: 'OTROS OBLIGADOS',
+  13: 'ANULACION',
   255: 'DESCONOCIDO',
 };
 
@@ -32,10 +32,11 @@ const COND_FALLBACK = {
   3: 'POR VERIFICAR',
   4: 'PENDIENTE',
   5: '-',
+  6: 'NO APLICABLE',
   255: 'DESCONOCIDO',
 };
 
-/** Digito verificador del RUC: modulo 11 con pesos 5 4 3 2 7 6 5 4 3 2. */
+// RUC check digit: modulo 11 with weights 5 4 3 2 7 6 5 4 3 2.
 export function isValidRuc(ruc) {
   if (!/^\d{11}$/.test(ruc)) return false;
   const weights = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
@@ -47,10 +48,10 @@ export function isValidRuc(ruc) {
   return check === Number(ruc[10]);
 }
 
-async function gunzipIfNeeded(buffer) {
+async function gunzip(buffer) {
   const bytes = new Uint8Array(buffer);
-  // Si el servidor ya lo descomprimio (Content-Encoding: gzip), la magia gzip
-  // 1f 8b ya no esta y hay que tratarlo como texto plano.
+  // If the server already decoded it (Content-Encoding: gzip), the 1f 8b magic
+  // is gone and it is plain text.
   const looksGzipped = bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
   if (!looksGzipped) return new TextDecoder('utf-8').decode(bytes);
 
@@ -61,118 +62,37 @@ async function gunzipIfNeeded(buffer) {
   return new Response(stream).text();
 }
 
-class ShardBackend {
-  constructor(baseUrl, meta) {
+/** One sharded gzipped-TSV set. `parse` fills a Map keyed by RUC string. */
+class ShardSet {
+  constructor(baseUrl, dir, shardCount, parse) {
     this.baseUrl = baseUrl;
-    this.shardCount = meta.shards.shardCount;
+    this.dir = dir;
+    this.shardCount = shardCount;
+    this.parse = parse;
     this.cache = new Map();
-    this.name = 'shards';
   }
 
-  shardPath(ruc) {
+  url(ruc) {
     const id = Number(BigInt(ruc) % BigInt(this.shardCount));
     const hex = id.toString(16).padStart(3, '0');
-    return `${this.baseUrl}/shards/${hex[0]}/${hex}.tsv.gz`;
+    return `${this.baseUrl}/${this.dir}/${hex[0]}/${hex}.tsv.gz`;
   }
 
-  async lookup(ruc) {
-    const url = this.shardPath(ruc);
+  async load(ruc) {
+    const url = this.url(ruc);
     let table = this.cache.get(url);
-
     if (!table) {
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`shard ${url}: HTTP ${resp.status}`);
-      const text = await gunzipIfNeeded(await resp.arrayBuffer());
+      const text = await gunzip(await resp.arrayBuffer());
       table = new Map();
       for (const line of text.split('\n')) {
-        if (!line) continue;
-        const [k, nombre, estado, cond, ubigeo] = line.split('\t');
-        table.set(k, {
-          ruc: k,
-          nombre,
-          estado: Number(estado),
-          cond: Number(cond),
-          ubigeo,
-          dom: null,
-        });
+        if (line) this.parse(line, table);
       }
-      // Los shards son chicos; conservarlos evita refetch al tipear variantes.
+      // Shards are small; keeping them avoids refetching while the user retypes.
       this.cache.set(url, table);
     }
-
-    return table.get(String(ruc)) || null;
-  }
-}
-
-/** Carga un bundle UMD como script clasico y devuelve el global que expone. */
-function loadUmd(url, globalName) {
-  if (window[globalName]) return Promise.resolve(window[globalName]);
-  return new Promise((resolve, reject) => {
-    const tag = document.createElement('script');
-    tag.src = url;
-    tag.async = true;
-    tag.onload = () => (
-      window[globalName]
-        ? resolve(window[globalName])
-        : reject(new Error(`${url} no expuso ${globalName}`))
-    );
-    tag.onerror = () => reject(new Error(`no se pudo cargar ${url}`));
-    document.head.appendChild(tag);
-  });
-}
-
-class SqliteBackend {
-  constructor(baseUrl, meta) {
-    this.baseUrl = baseUrl;
-    this.meta = meta;
-    this.worker = null;
-    this.name = 'sqlite';
-  }
-
-  async init() {
-    // Todo lo que cruza hacia el worker va absoluto. Dentro del worker,
-    // `location` es la del propio worker (vendor/sql.js-httpvfs/), asi que una
-    // ruta relativa a la pagina se resuelve al lugar equivocado y da 404.
-    const root = new URL(`${this.baseUrl}/`, location.href);
-    const abs = (path) => new URL(path, root).toString();
-    const dir = 'vendor/sql.js-httpvfs';
-
-    // El paquete se publica como bundle UMD, no como modulo ES: un `import()`
-    // dinamico revienta. Se carga como script clasico y se toma el global.
-    const createDbWorker = await loadUmd(abs(`${dir}/index.js`), 'createDbWorker');
-
-    const inner = { ...this.meta.sqlite };
-    inner.urlPrefix = abs(inner.urlPrefix);
-
-    this.worker = await createDbWorker(
-      [{ from: 'inline', config: inner }],
-      abs(`${dir}/sqlite.worker.js`),
-      abs(`${dir}/sql-wasm.wasm`),
-    );
-    // Consulta de humo: si el B-tree no es navegable por HTTP, que falle ahora
-    // y no en la primera busqueda del usuario.
-    await this.worker.db.query('SELECT ruc FROM contribuyente LIMIT 1');
-  }
-
-  async lookup(ruc) {
-    // Los parametros van en un array. La firma del paquete es variadica
-    // (`query(sql, ...params)`) pero por dentro pasa el rest tal cual a sql.js,
-    // que espera un array: mandar el valor suelto devuelve cero filas en
-    // silencio, sin error. Perdido un rato ahi, queda escrito.
-    const rows = await this.worker.db.query(
-      'SELECT ruc, nombre, estado, cond, ubigeo, dom FROM contribuyente WHERE ruc = ?',
-      [Number(ruc)],
-    );
-    if (!rows.length) return null;
-    const row = rows[0];
-    return {
-      ruc: String(row.ruc),
-      nombre: row.nombre,
-      estado: Number(row.estado),
-      cond: Number(row.cond),
-      ubigeo: String(row.ubigeo ?? ''),
-      dom: row.dom || null,
-    };
+    return table;
   }
 }
 
@@ -180,8 +100,8 @@ export class PadronClient {
   constructor(baseUrl = '.') {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.meta = null;
-    this.backend = null;
-    this.degraded = null;
+    this.core = null;
+    this.dom = null;
   }
 
   async init() {
@@ -189,13 +109,15 @@ export class PadronClient {
     if (!resp.ok) throw new Error(`meta.json: HTTP ${resp.status}`);
     this.meta = await resp.json();
 
-    try {
-      const sqlite = new SqliteBackend(this.baseUrl, this.meta);
-      await sqlite.init();
-      this.backend = sqlite;
-    } catch (err) {
-      this.degraded = err.message || String(err);
-      this.backend = new ShardBackend(this.baseUrl, this.meta);
+    this.core = new ShardSet(this.baseUrl, 'shards', this.meta.shards.shardCount, (line, table) => {
+      const [ruc, nombre, estado, cond, ubigeo] = line.split('\t');
+      table.set(ruc, { ruc, nombre, estado: Number(estado), cond: Number(cond), ubigeo, dom: null });
+    });
+    if (this.meta.domicilio) {
+      this.dom = new ShardSet(this.baseUrl, 'dom', this.meta.domicilio.shardCount, (line, table) => {
+        const tab = line.indexOf('\t');
+        table.set(line.slice(0, tab), line.slice(tab + 1));
+      });
     }
     return this.meta;
   }
@@ -209,19 +131,18 @@ export class PadronClient {
   }
 
   async lookup(ruc) {
-    const clean = String(ruc).replace(/\D/g, '');
-    if (clean.length !== 11) throw new Error('El RUC debe tener 11 digitos');
+    const key = String(ruc).replace(/\D/g, '');
+    if (key.length !== 11) throw new Error('El RUC debe tener 11 dígitos');
 
-    try {
-      return await this.backend.lookup(clean);
-    } catch (err) {
-      if (this.backend.name === 'sqlite') {
-        // Degradar en caliente: el worker puede morir despues del init.
-        this.degraded = err.message || String(err);
-        this.backend = new ShardBackend(this.baseUrl, this.meta);
-        return this.backend.lookup(clean);
-      }
-      throw err;
-    }
+    // Core and domicilio shards fetch in parallel; both are small and cached.
+    const [coreTable, domTable] = await Promise.all([
+      this.core.load(key),
+      this.dom ? this.dom.load(key) : Promise.resolve(null),
+    ]);
+
+    const rec = coreTable.get(key);
+    if (!rec) return null;
+    if (domTable) rec.dom = domTable.get(key) || null;
+    return rec;
   }
 }

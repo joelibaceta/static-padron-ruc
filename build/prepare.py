@@ -1,13 +1,14 @@
-"""Descarga, descomprime y normaliza el padron reducido a registros limpios.
+"""Download, decompress and normalize the reduced padron into clean records.
 
-El parseo es guiado por la cabecera, no por posiciones fijas: SUNAT ha movido
-columnas antes. Si falta una columna requerida, el build muere imprimiendo las
-columnas que si encontro, que es la unica forma sana de depurar esto sin bajar
-el archivo a mano.
+Parsing is header-driven, not by fixed positions: SUNAT has moved columns
+before. If a required column is missing, the build dies printing the columns it
+did find, which is the only sane way to debug this without downloading the file
+by hand.
 """
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 import shutil
@@ -17,19 +18,19 @@ from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 
 from common import (
-    COND_CODES,
-    ESTADO_CODES,
     WORK,
     clean_text,
+    cond_code,
     die,
+    estado_code,
     human_bytes,
     log,
     norm_header,
 )
 from discover import USER_AGENT
 
-# Alias aceptados por columna logica. Se comparan ya normalizados
-# (sin tildes, mayusculas, separadores colapsados a un espacio).
+# Accepted aliases per logical column. Compared already normalized
+# (no accents, uppercase, separators collapsed to a single space).
 COLUMN_ALIASES: Dict[str, Tuple[str, ...]] = {
     "ruc": ("RUC", "NUMERO RUC", "NRO RUC"),
     "nombre": (
@@ -48,7 +49,7 @@ COLUMN_ALIASES: Dict[str, Tuple[str, ...]] = {
     "ubigeo": ("UBIGEO", "CODIGO UBIGEO"),
 }
 
-# Partes del domicilio, en el orden en que se concatenan.
+# Address parts, in the order they are concatenated.
 ADDRESS_PARTS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("tipo_via", ("TIPO DE VIA", "TIPO VIA")),
     ("nombre_via", ("NOMBRE DE VIA", "NOMBRE VIA")),
@@ -74,24 +75,32 @@ PREFIXED = {
 def download(url: str, dest: Path, timeout: int = 900) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    log("descargando {}".format(url))
+    log("downloading {}".format(url))
     with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as out:
         shutil.copyfileobj(resp, out, length=1 << 20)
-    log("descargado {} ({})".format(dest.name, human_bytes(dest.stat().st_size)))
+    log("downloaded {} ({})".format(dest.name, human_bytes(dest.stat().st_size)))
     return dest
 
 
+def _sha256(path: Path, chunk: int = 1 << 20) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 def extract_main_member(zip_path: Path, dest_dir: Path) -> Path:
-    """Saca el .txt mas grande del zip; SUNAT a veces mete un readme al lado."""
+    """Take the largest .txt from the zip; SUNAT sometimes bundles a readme."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path) as zf:
         members = [m for m in zf.infolist() if not m.is_dir()]
         if not members:
-            die("el zip {} esta vacio".format(zip_path.name))
+            die("the zip {} is empty".format(zip_path.name))
         txt = [m for m in members if m.filename.lower().endswith((".txt", ".csv"))]
         target = max(txt or members, key=lambda m: m.file_size)
         log(
-            "extrayendo {} ({}) de {}".format(
+            "extracting {} ({}) from {}".format(
                 target.filename, human_bytes(target.file_size), zip_path.name
             )
         )
@@ -125,9 +134,9 @@ def _build_index(header_fields: List[str]) -> Dict[str, int]:
     missing = [k for k in ("ruc", "nombre", "estado", "condicion") if k not in index]
     if missing:
         die(
-            "faltan columnas requeridas {} en el padron.\n"
-            "Columnas encontradas: {}\n"
-            "Ajusta COLUMN_ALIASES en build/prepare.py.".format(missing, normalized)
+            "missing required columns {} in the padron.\n"
+            "Columns found: {}\n"
+            "Adjust COLUMN_ALIASES in build/prepare.py.".format(missing, normalized)
         )
     return index
 
@@ -153,10 +162,10 @@ def iter_records(
     include_domicilio: bool,
     max_domicilio_chars: int = 90,
 ) -> Iterator[Tuple[int, str, int, int, int, str]]:
-    """Genera (ruc, nombre, estado, condicion, ubigeo, domicilio).
+    """Yield (ruc, nombre, estado, condicion, ubigeo, domicilio).
 
-    Es un generador a proposito: el padron no cabe comodo en memoria y el runner
-    de GitHub tiene 7 GB de RAM que preferimos no tocar.
+    Deliberately a generator: the padron does not fit comfortably in memory and
+    the GitHub runner has 7 GB of RAM that we prefer not to touch.
     """
     stats = {"lines": 0, "bad": 0, "dupe": 0}
     unknown_estado: Dict[str, int] = {}
@@ -170,13 +179,13 @@ def iter_records(
 
         if first_cell.isdigit() and len(first_cell) == 11:
             die(
-                "el archivo no trae fila de cabecera (primera celda: {}). "
-                "El parseo posicional no es seguro; define la cabecera a mano "
-                "en build/prepare.py antes de continuar.".format(first_cell)
+                "the file has no header row (first cell: {}). "
+                "Positional parsing is not safe; define the header by hand "
+                "in build/prepare.py before continuing.".format(first_cell)
             )
 
         index = _build_index(header_fields)
-        log("mapeo de columnas: {}".format(index))
+        log("column mapping: {}".format(index))
 
         pos_ruc = index["ruc"]
         pos_nombre = index["nombre"]
@@ -204,8 +213,8 @@ def iter_records(
 
             estado_raw = clean_text(fields[pos_estado]).upper()
             cond_raw = clean_text(fields[pos_cond]).upper()
-            estado = ESTADO_CODES.get(estado_raw)
-            cond = COND_CODES.get(cond_raw)
+            estado = estado_code(estado_raw)
+            cond = cond_code(cond_raw)
             if estado is None:
                 unknown_estado[estado_raw] = unknown_estado.get(estado_raw, 0) + 1
                 estado = 255
@@ -235,30 +244,42 @@ def iter_records(
             )
 
             if stats["lines"] % 1_000_000 == 0:
-                log("  {:,} lineas leidas".format(stats["lines"]))
+                log("  {:,} lines read".format(stats["lines"]))
 
     log(
-        "parseo terminado: {:,} lineas, {:,} descartadas, {:,} duplicadas".format(
+        "parsing finished: {:,} lines, {:,} discarded, {:,} duplicated".format(
             stats["lines"], stats["bad"], stats["dupe"]
         )
     )
     if unknown_estado:
-        log("AVISO estados no mapeados: {}".format(dict(list(unknown_estado.items())[:10])))
+        log("WARN unmapped estados: {}".format(dict(list(unknown_estado.items())[:10])))
     if unknown_cond:
-        log("AVISO condiciones no mapeadas: {}".format(dict(list(unknown_cond.items())[:10])))
+        log("WARN unmapped condiciones: {}".format(dict(list(unknown_cond.items())[:10])))
 
 
-def prepare_source(cfg: dict, sig: dict, local_txt: Optional[str] = None) -> Path:
-    """Deja en disco el .txt listo para parsear (descargando si hace falta)."""
+def prepare_source(cfg: dict, sig: dict, local_txt: Optional[str] = None) -> Tuple[Path, str]:
+    """Leave the .txt ready to parse and return (txt_path, source_sha256).
+
+    The sha256 is of the source archive (or the local file) — a definitive
+    fingerprint of exactly what was processed, recorded in meta.json.
+    """
     if local_txt:
         path = Path(local_txt)
         if not path.exists():
-            die("no existe el archivo local {}".format(path))
-        log("usando archivo local {}".format(path))
-        return path
+            die("local file {} does not exist".format(path))
+        log("using local file {}".format(path))
+        return path, _sha256(path)
 
     WORK.mkdir(parents=True, exist_ok=True)
     zip_path = WORK / "padron.zip"
     if not zip_path.exists() or os.environ.get("FORCE_DOWNLOAD") == "1":
         download(sig["url"], zip_path)
-    return extract_main_member(zip_path, WORK)
+
+    expected = sig.get("content_length")
+    actual = zip_path.stat().st_size
+    if expected and actual != expected:
+        die("download size mismatch: got {} bytes, expected {}".format(actual, expected))
+
+    sha = _sha256(zip_path)
+    log("source sha256: {}".format(sha))
+    return extract_main_member(zip_path, WORK), sha

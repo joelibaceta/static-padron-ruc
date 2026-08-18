@@ -3,87 +3,161 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Padron RUC — snapshot SUNAT</title>
-<meta name="description" content="Consulta de RUC sobre un snapshot del padron reducido de SUNAT, servido de forma estatica.">
+<title>Padrón RUC — snapshot SUNAT (no oficial)</title>
+<meta name="description" content="Consulta de RUC sobre un snapshot del padrón reducido de SUNAT, servido de forma estática. Sitio no oficial.">
+<meta name="theme-color" content="#0a4f96">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23004b8d'/><path d='M0 0h16L0 16Z' fill='%23a4093f'/></svg>">
 <style>
   :root {
-    color-scheme: light dark;
-    --bg: #fbfbfa;
-    --fg: #14161a;
-    --muted: #6b7280;
-    --line: #e2e2df;
-    --card: #ffffff;
-    --accent: #1f5f8b;
-    --ok: #146c43;
-    --warn: #8a5a00;
-    --bad: #a4262c;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #14161a; --fg: #e8e8e6; --muted: #9aa0a6; --line: #2b2f36;
-      --card: #1b1e24; --accent: #6ba7d1; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
-    }
+    color-scheme: dark;
+    --accent: #0a5bad;      /* azul SUNAT */
+    --brand-red: #a4093f;   /* carmín SUNAT */
+    --ink: #ffffff;
+    --muted: rgba(255,255,255,.72);
+    --faint: rgba(255,255,255,.5);
+    --glass: rgba(255,255,255,.12);
+    --glass-2: rgba(255,255,255,.08);
+    --hair: rgba(255,255,255,.16);
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: var(--bg); color: var(--fg);
+    margin: 0; min-height: 100dvh; color: var(--ink);
     font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    display: flex; justify-content: center; padding: 2.5rem 1.25rem 4rem;
+    background: radial-gradient(120% 100% at 50% 0%, #1367bd 0%, #0a4f96 45%, #063567 100%) fixed;
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: clamp(1.5rem, 6vh, 5rem) 1.25rem 3rem;
   }
-  main { width: 100%; max-width: 42rem; }
-  h1 { font-size: 1.4rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
-  .sub { color: var(--muted); font-size: .9rem; margin: 0 0 1.75rem; }
-  form { display: flex; gap: .5rem; margin-bottom: .75rem; }
-  input {
-    flex: 1; padding: .7rem .85rem; font-size: 1.05rem; font-variant-numeric: tabular-nums;
-    letter-spacing: .04em; border: 1px solid var(--line); border-radius: 8px;
-    background: var(--card); color: var(--fg);
+  main { width: 100%; max-width: 34rem; }
+
+  /* Glass card */
+  .glass {
+    background: var(--glass); border: 1px solid var(--hair); border-radius: 24px;
+    backdrop-filter: blur(22px) saturate(1.1); -webkit-backdrop-filter: blur(22px) saturate(1.1);
+    box-shadow: 0 24px 60px -20px rgba(3,26,54,.55); padding: 1.5rem;
   }
-  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
-  button {
-    padding: .7rem 1.15rem; font-size: 1rem; border: 0; border-radius: 8px;
-    background: var(--accent); color: #fff; cursor: pointer;
+
+  /* Header: brand chip + title */
+  .head { display: flex; align-items: center; gap: .8rem; margin-bottom: 1.25rem; }
+  .chip {
+    width: 2.4rem; height: 2.4rem; border-radius: 12px; flex: none;
+    background: #fff; display: grid; place-items: center; overflow: hidden;
+    box-shadow: 0 4px 12px rgba(3,26,54,.25);
   }
-  button:disabled { opacity: .5; cursor: default; }
-  .hint { min-height: 1.3rem; font-size: .85rem; color: var(--muted); margin-bottom: 1.25rem; }
-  .hint.error { color: var(--bad); }
-  .card {
-    border: 1px solid var(--line); border-radius: 10px; background: var(--card);
-    padding: 1.15rem 1.25rem; margin-bottom: 1rem;
+  .chip .mark { width: 1.15rem; height: 1.15rem; border-radius: 4px; overflow: hidden; transform: rotate(45deg); }
+  .chip .mark span { display: block; height: 50%; }
+  .chip .mark .r { background: var(--brand-red); }
+  .chip .mark .b { background: var(--accent); }
+  h1 { font-size: 1.15rem; margin: 0; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: .82rem; margin: .1rem 0 0; }
+
+  /* Search bar */
+  .search {
+    display: flex; align-items: center; gap: .55rem; background: #fff; border-radius: 16px;
+    padding: .3rem .3rem .3rem .9rem; box-shadow: 0 6px 20px -8px rgba(3,26,54,.4);
+    transition: box-shadow .15s ease;
   }
-  .card h2 { margin: 0 0 .15rem; font-size: 1.1rem; }
-  .ruc { font-variant-numeric: tabular-nums; letter-spacing: .05em; color: var(--muted); font-size: .9rem; }
-  dl { display: grid; grid-template-columns: 9.5rem 1fr; gap: .4rem 1rem; margin: 1rem 0 0; font-size: .93rem; }
-  dt { color: var(--muted); }
-  dd { margin: 0; }
-  .pill { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .8rem; border: 1px solid currentColor; }
-  .pill.ok { color: var(--ok); } .pill.warn { color: var(--warn); } .pill.bad { color: var(--bad); }
-  footer { margin-top: 2.5rem; font-size: .8rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 1rem; }
-  footer p { margin: .4rem 0; }
-  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
-  .notice { border-left: 3px solid var(--warn); padding-left: .8rem; }
+  .search:focus-within { box-shadow: 0 0 0 3px rgba(255,255,255,.55), 0 6px 20px -8px rgba(3,26,54,.4); }
+  .search .lead { color: var(--accent); flex: none; }
+  .search input {
+    flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: #0f2340;
+    font-size: 1.1rem; font-variant-numeric: tabular-nums; letter-spacing: .04em; padding: .6rem 0;
+  }
+  .search input::placeholder { color: #94a3b8; letter-spacing: .04em; }
+  .search button {
+    flex: none; display: inline-flex; align-items: center; gap: .35rem; border: 0; cursor: pointer;
+    background: var(--accent); color: #fff; font-size: .95rem; font-weight: 600;
+    padding: .6rem 1rem; border-radius: 12px; transition: filter .12s ease;
+  }
+  .search button:not(:disabled):hover { filter: brightness(1.08); }
+  .search button:disabled { opacity: .45; cursor: default; }
+
+  .hint { min-height: 1.2rem; font-size: .82rem; color: var(--muted); margin: .7rem .25rem 0; line-height: 1.5; }
+  .hint.error { color: #ffd0d8; }
+  .hint b { color: var(--ink); font-variant-numeric: tabular-nums; font-weight: 700; }
+  .hint .ico { display: inline-block; vertical-align: -.18em; }
+  .hint .bolt { color: #ffd54a; width: 15px; height: 15px; }
+
+  /* Result panel */
+  #result:not(:empty) { margin-top: 1.1rem; }
+  .panel { background: var(--glass-2); border: 1px solid var(--hair); border-radius: 18px; padding: 1.1rem 1.15rem; }
+  .name { margin: 0; font-size: 1.05rem; font-weight: 700; line-height: 1.35; }
+  .ruc { font-variant-numeric: tabular-nums; letter-spacing: .06em; color: var(--muted); font-size: .85rem; margin: .2rem 0 0; }
+  .rows { margin: .9rem 0 0; }
+  .row { display: flex; align-items: center; gap: .7rem; padding: .68rem .1rem; }
+  .row + .row { border-top: 1px solid rgba(255,255,255,.1); }
+  .row .ico { color: var(--faint); flex: none; }
+  .row .label { color: var(--muted); font-size: .9rem; }
+  .row .val { margin-left: auto; text-align: right; font-weight: 600; font-size: .92rem; }
+  .row .val em { font-weight: 400; color: var(--faint); font-size: .85rem; }
+  .empty { color: var(--muted); font-size: .9rem; margin: .5rem 0 0; }
+
+  .pill { display: inline-block; padding: .12rem .6rem; border-radius: 999px; font-size: .78rem; font-weight: 600; }
+  .pill.ok   { background: rgba(74,222,128,.2);  color: #bbf7d0; }
+  .pill.warn { background: rgba(251,191,36,.2);  color: #fde68a; }
+  .pill.bad  { background: rgba(248,113,133,.22); color: #fecdd3; }
+
+  /* Footer */
+  footer { margin: 1.4rem auto 0; font-size: .76rem; color: var(--faint); text-align: center; }
+  footer p { margin: .5rem 0; }
+  .notice { line-height: 1.5; }
+  .notice strong { color: var(--muted); }
+
+  svg.ico { display: block; }
+  @media (max-width: 26rem) {
+    .search button span { display: none; }
+    .search button { padding: .6rem .7rem; }
+  }
 </style>
 </head>
 <body>
+<!-- Inline line-icon sprite (Material-style): zero dependencies. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
+  </symbol>
+  <symbol id="i-badge" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 3l7 3v5.5c0 4-3 6.5-7 8-4-1.5-7-4-7-8V6z"/><path d="M9 12l2 2 4-4.2"/>
+  </symbol>
+  <symbol id="i-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 11l8-6.5 8 6.5"/><path d="M6 10v9h12v-9"/><path d="M10 19v-5h4v5"/>
+  </symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 21s6.5-5.5 6.5-10.5a6.5 6.5 0 0 0-13 0C5.5 15.5 12 21 12 21z"/><circle cx="12" cy="10.5" r="2.4"/>
+  </symbol>
+  <symbol id="i-building" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 21h16"/><path d="M6 21V6l7-3v18"/><path d="M13 21V9l5 2.5V21"/><path d="M9 8h0M9 12h0M9 16h0"/>
+  </symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+    <path d="M13 2L4.5 13.2c-.4.5 0 1.3.7 1.3H11l-1.2 7.2c-.1.7.8 1.1 1.3.5L19.5 11c.4-.5 0-1.3-.7-1.3H13l1.2-7.2c.1-.7-.8-1.1-1.2-.5z"/>
+  </symbol>
+</svg>
+
 <main>
-  <h1>Padron RUC</h1>
-  <p class="sub">Snapshot del padron reducido publico de SUNAT, servido estatico. Sin backend.</p>
+  <div class="glass">
+    <div class="head">
+      <span class="chip" aria-hidden="true">
+        <span class="mark"><span class="r"></span><span class="b"></span></span>
+      </span>
+      <div>
+        <h1>Padrón RUC</h1>
+        <p class="sub">Snapshot SUNAT · sitio no oficial · sin backend</p>
+      </div>
+    </div>
 
-  <form id="form" autocomplete="off">
-    <input id="ruc" name="ruc" inputmode="numeric" maxlength="13" placeholder="20100047218"
-           aria-label="Numero de RUC" required>
-    <button id="submit" type="submit" disabled>Consultar</button>
-  </form>
-  <p class="hint" id="hint" role="status" aria-live="polite">Cargando indice…</p>
+    <form id="form" class="search" autocomplete="off">
+      <svg class="ico lead" width="22" height="22" aria-hidden="true" focusable="false"><use href="#i-search"/></svg>
+      <input id="ruc" name="ruc" inputmode="numeric" maxlength="13" placeholder="20100047218"
+             aria-label="Número de RUC" required>
+      <button id="submit" type="submit" disabled>Consultar<span> RUC</span></button>
+    </form>
+    <p class="hint" id="hint" role="status" aria-live="polite">Cargando índice…</p>
 
-  <div id="result"></div>
+    <div id="result" aria-live="polite"></div>
+  </div>
 
   <footer>
     <p class="notice" id="disclaimer">
-      Estos datos son una copia periodica del padron reducido de SUNAT. El estado y la
-      condicion de domicilio pueden estar desactualizados respecto al registro vivo.
-      <strong>No usar como validacion legal</strong> de un contribuyente ni de un
-      comprobante: para eso corresponde la consulta oficial de SUNAT.
+      <strong>Sitio no oficial.</strong> Copia periódica del padrón reducido de SUNAT.
     </p>
     <p id="meta-line"></p>
   </footer>
