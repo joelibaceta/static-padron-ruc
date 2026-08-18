@@ -4,7 +4,6 @@
 
 ---
 
----
 
 ## Cómo funciona
 
