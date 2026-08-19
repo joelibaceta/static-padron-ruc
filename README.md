@@ -3,6 +3,9 @@
 18 millones de RUC, consultables en el navegador. Cero backend.     
 
 ---
+<p align="center">
+  <img width="809" height="666" alt="Captura de pantalla 2026-08-18 a la(s) 8 58 17 p  m" src="https://github.com/user-attachments/assets/b964886d-4ff9-4774-8b94-d0bd247b1127" />
+</p>
 
 
 ## Cómo funciona
