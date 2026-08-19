@@ -24,8 +24,8 @@ Sin backend: la página es interactiva al instante y cada consulta es un `fetch`
 ### ¿Por qué `ruc % N` y no un prefijo?
 
 Casi todos los RUC peruanos empiezan en `10` o `20`. Shardear por los primeros
-dígitos produce cubetas grotescamente desbalanceadas. El módulo del número
-completo reparte parejo sin necesitar un hash.
+dígitos produce chunks grotescamente desbalanceadas. El módulo del número
+completo reparte parejo sin necesitar un hash mas complejo.
 
 ### ¿Por qué el domicilio va en un sidecar aparte?
 
