@@ -79,8 +79,6 @@ o `config.json` fuerza rebuild.
 
 ---
 
----
-
 ## Estructura
 
 ```
